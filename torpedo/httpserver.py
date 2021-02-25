@@ -1,6 +1,8 @@
-from microWebSrv import MicroWebSrv
 import machine
 import ujson
+
+from config import FLAG_FIRSTSLEEP, FLAG_FTP
+from microWebSrv import MicroWebSrv
 
 
 class HttpServer:
@@ -108,14 +110,8 @@ class HttpServer:
             """
             使ESP32进入深度睡眠，唤醒后便进入工作模式
             """
-            with open('hardware_config.json', 'r') as f:
-                json = f.read()
-            config = ujson.loads(json)
-
-            FIRSTSLEEP_TRIGGER = config['firstsleep_trigger']
-
             def first_sleep():
-                with open(FIRSTSLEEP_TRIGGER, 'w') as s:
+                with open(FLAG_FIRSTSLEEP, 'w') as s:
                     pass
                 machine.reset()
 
@@ -155,14 +151,8 @@ class HttpServer:
             """
             Start FTP service
             """
-            with open('hardware_config.json', 'r') as f:
-                json = f.read()
-            config = ujson.loads(json)
-
-            FTP_TRIGGER = config['ftp_trigger']
-
             def start_ftp():
-                with open(FTP_TRIGGER, 'w') as s:
+                with open(FLAG_FTP, 'w') as s:
                     pass
                 machine.reset()
 
