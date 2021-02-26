@@ -2,71 +2,19 @@ import esp
 import machine
 import ujson
 import utime
+import utilities as util
 
 from config import *
 
+
 # disable os debug info
 esp.osdebug(None)
-print('--------------------')
+
 # Loading user settings from JSON file
-with open('user_settings.json', 'r') as f:
-    json = f.read()
-settings = ujson.loads(json)
-print('File "user_settings.json" has been loaded!')
-print('--------------------')
+settings = util.load_settings()
 
 # Initialize VPP pin
-vpp = machine.Pin(PIN_VPP, machine.Pin.OUT, value=0)
-print('The VPP pin has been initialized')
-print('--------------------')
-
-
-def initialization(init_gy521=True, init_ds18=True, init_bat=True, init_wifi=True):
-    """
-    Initialize GY521 module, battery ADC pin and wifi
-    NOTE: VPP pin must be turned on in order to initialize the GY521 module
-    """
-    if init_gy521:
-        from gy521 import GY521
-        # Initialize the GY521 module
-        print('Initializing GY521 module')
-        try:
-            gy521_sensor = GY521(PIN_I2C_SDA, PIN_I2C_SCL)
-        except Exception as e:
-            print(e)
-            gy521_sensor = None
-    else:
-        gy521_sensor = None
-
-    if init_ds18:
-        from tempsensor import Ds18Sensors, SingleTempSensor
-        print('Initializing DS18B20 sensor')
-        try:
-            ow = Ds18Sensors(PIN_ONEWIRE)
-            romcode_string = ow.get_device_list()[0].get('value')
-            ds18_sensor = SingleTempSensor(ow, romcode_string)
-        except Exception as e:
-            print(e)
-            ds18_sensor = None
-    else:
-        ds18_sensor = None
-
-    if init_bat:
-        from battery import Battery
-        # Initialize the battery power management
-        print('Initializing power management')
-        lipo = Battery(PIN_BAT_ADC)
-    else:
-        lipo = None
-
-    if init_wifi:
-        from wifi import WiFi
-        # Initialize Wifi
-        print('Initializing WiFi')
-        wlan = WiFi()
-    else:
-        wlan = None
-    return gy521_sensor, ds18_sensor, lipo, wlan
+vpp = util.init_vpp()
 
 
 def open_wireless(wlan):
@@ -83,85 +31,40 @@ def open_wireless(wlan):
     print('--------------------')
 
 
-def pull_hold_pins():
-    """
-    Set output pins to input with pull hold to save power consumption
-    """
-    machine.Pin(PIN_I2C_SDA, machine.Pin.IN, machine.Pin.PULL_HOLD)
-    machine.Pin(PIN_I2C_SCL, machine.Pin.IN, machine.Pin.PULL_HOLD)
-    machine.Pin(PIN_VPP, machine.Pin.IN, machine.Pin.PULL_HOLD)
-    machine.Pin(PIN_LED_MODE, machine.Pin.IN, machine.Pin.PULL_HOLD)
-    machine.Pin(PIN_LED_RED, machine.Pin.IN, machine.Pin.PULL_HOLD)
-    machine.Pin(PIN_LED_GRN, machine.Pin.IN, machine.Pin.PULL_HOLD)
-
-
-def unhold_pins():
-    """
-    Unhold the pins after wake up from deep sleep
-    """
-    machine.Pin(PIN_I2C_SDA, machine.Pin.OUT, None)
-    machine.Pin(PIN_I2C_SCL, machine.Pin.OUT, None)
-    machine.Pin(PIN_VPP, machine.Pin.OUT, None)
-    # machine.Pin(PIN_LED_MODE, machine.Pin.OUT, None, value=1)
-    # machine.Pin(PIN_LED_RED, machine.Pin.OUT, None)
-    # machine.Pin(PIN_LED_GRN, machine.Pin.OUT, None)
-
-
-def init_leds():
-    """
-    Initialize the on-board LED which is on pin5 and active low
-    """
-    # The on-board led of the Wemos Lolin32 is low active
-    led_mode = machine.Signal(
-        machine.Pin(PIN_LED_MODE, machine.Pin.OUT, value=PIN_LED_MODE_LOW_ACTIVE),
-        invert=True if PIN_LED_MODE_LOW_ACTIVE else False
-    )
-    led_red = machine.Signal(
-        machine.Pin(PIN_LED_RED, machine.Pin.OUT, value=PIN_LED_RED_LOW_ACTIVE),
-        invert=True if PIN_LED_RED_LOW_ACTIVE else False
-    )
-    led_grn = machine.Signal(
-        machine.Pin(PIN_LED_GRN, machine.Pin.OUT, value=PIN_LED_GRN_LOW_ACTIVE),
-        invert=True if PIN_LED_GRN_LOW_ACTIVE else False
-    )
-    return led_mode, led_red, led_grn
-
-
 if machine.reset_cause() == machine.SOFT_RESET:
-    import uos
-
     # 初次进入休眠状态
-    if FLAG_FIRSTSLEEP in uos.listdir():
-        uos.remove(FLAG_FIRSTSLEEP)
-        with open(FLAG_DEEPSLEEP, 'w') as f:
-            pass
-        pull_hold_pins()
+    if util.in_firstsleep_mode():
+        util.remove_flag_firstsleep()
+        util.create_flag_deepsleep()
+        util.pull_hold_pins()
         machine.deepsleep(FIRSTSLEEP_DURATION_MS)
     # 工作模式下的休眠状态
-    elif FLAG_DEEPSLEEP in uos.listdir():
-        pull_hold_pins()
+    elif util.in_deepsleep_mode():
+        util.pull_hold_pins()
         machine.deepsleep(settings['deepSleepIntervalMs'])
     # FTP开启
-    elif FLAG_FTP in uos.listdir():
-        uos.remove(FLAG_FTP)
-        _, _, _, wifi = initialization(init_gy521=False, init_ds18=False, init_bat=False, init_wifi=True)
-        led_mode, _, _ = init_leds()
+    elif util.in_ftp_mode():
+        util.remove_flag_ftp()
+        wifi = util.init_wifi()
+        led_mode = util.init_led_mode()
         led_mode.on()
         open_wireless(wifi)
         print('Initializing FTP service')
         utime.sleep_ms(500)
-        import uftpd
     # 进入校准模式
     else:
         import gc
         # Turn on VPP to supply power for GY521
         vpp.on()
         # Initialize the peripherals
-        gy521, ds18, battery, wifi = initialization(init_gy521=True, init_ds18=True, init_bat=True, init_wifi=True)
+        gy521 = util.init_gy521()
+        ds18 = util.init_ds18b20()
+        battery = util.init_lipo_adc()
+        wifi = util.init_wifi()
         print('Entering Calibration Mode...')
         print('--------------------')
-        # 1. Turn on the on-board green led to indicate calibration mode
-        led_mode, _, _ = init_leds()
+        # 1. Turn on the on-board led to indicate calibration mode
+        led_mode = util.init_led_mode()
         led_mode.on()
         # 2. Start WLAN in AP & STA mode to allow wifi connection
         utime.sleep_ms(1000)
@@ -188,16 +91,19 @@ if machine.reset_cause() == machine.SOFT_RESET:
         if web.is_started():
             print('HTTP service started')
         print('--------------------')
-# 工作模式
+
+# Working mode
 elif machine.reset_cause() == machine.DEEPSLEEP_RESET:
-    import uos
     from microWebCli import MicroWebCli
     # Unhold the pins to allow those pins to be used
-    unhold_pins()
+    util.unhold_pins()
     # Turn on VPP to supply power for GY521 and allow battery voltage measurement
     vpp.on()
     # Initialize the peripherals
-    gy521, ds18, battery, wifi = initialization(init_gy521=True, init_ds18=True, init_bat=True, init_wifi=True)
+    gy521 = util.init_gy521()
+    ds18 = util.init_ds18b20()
+    battery = util.init_lipo_adc()
+    wifi = util.init_wifi()
     print('Entering Working Mode...')
     utime.sleep_ms(500)
     send_data_to_fermenter = settings['fermenterAp']['enabled']
@@ -217,8 +123,7 @@ elif machine.reset_cause() == machine.DEEPSLEEP_RESET:
     else:
         print('Pls set up the Wifi connection first.')
         print('Entering Calibration Mode in 5sec...')
-        if FLAG_DEEPSLEEP in uos.listdir():
-            uos.remove(FLAG_DEEPSLEEP)
+        util.remove_flag_deepsleep()
         utime.sleep_ms(5000)
         machine.reset()
     print('--------------------')
@@ -240,16 +145,11 @@ elif machine.reset_cause() == machine.DEEPSLEEP_RESET:
     # 5. Turn off VPP to save power
     vpp.off()
     # 6. Calculate Specific Gravity
-    with open('regression.json', 'r') as f:
-        json = f.read()
-    reg = ujson.loads(json)
-    param_a = reg.get('a')
-    param_b = reg.get('b')
-    param_c = reg.get('c')
-    unit = reg.get('unit')
+    param_a, param_b, param_c, unit = util.load_regression_params()
     if not (param_a and param_b and param_c):
         print('The Hydrometer should be calibrated before use.')
         print('Entering Calibration Mode in 5sec...')
+        util.remove_flag_deepsleep()
         utime.sleep_ms(5000)
         machine.reset()
     gravity = param_a * tilt**2 + param_b * tilt + param_c
@@ -261,7 +161,7 @@ elif machine.reset_cause() == machine.DEEPSLEEP_RESET:
         plato = round((-1 * 616.868) + (1111.14 * gravity) - (630.272 * gravity ** 2) + (135.997 * gravity ** 3), 1)
 
     if wifi.is_connected():
-        machine_id = int.from_bytes(machine.unique_id(), 'big')
+        machine_id = util.get_machine_id()
         # 5.1. Send Specific Gravity data & battery level by MQTT
         if send_data_to_mqtt:
             from mqtt_client import MQTT
@@ -348,28 +248,26 @@ elif machine.reset_cause() == machine.DEEPSLEEP_RESET:
         wifi.sta_disconnect()
         utime.sleep_ms(200)
     # 6. Go deep sleep again, and will wake up after sometime to repeat above.
-    with open(FLAG_DEEPSLEEP, 'w') as f:
-        pass
+    util.create_flag_deepsleep()
     print('Sleeping now...')
     machine.reset()
-# 首次开机，用户有1分钟时间出发模式选择开关进去校准模式; 1分钟之后程序会进入DEEP-SLEEP模式，再次唤醒后将开始工作
-else:
-    import uos
 
-    if FLAG_DEEPSLEEP in uos.listdir():
-        uos.remove(FLAG_DEEPSLEEP)
-    if FLAG_FIRSTSLEEP in uos.listdir():
-        uos.remove(FLAG_FIRSTSLEEP)
+# Power-on, calibration mode can be activated within 1 minute, otherwise it will deepsleep to enter working mode
+else:
+    util.remove_flag_deepsleep()
+    util.remove_flag_firstsleep()
 
     # Initialize LEDs and battery power management
-    led_mode, led_red, led_grn = init_leds()
+    led_mode = util.init_led_mode()
+    led_red = util.init_led_red()
+    led_grn = util.init_led_grn()
     vpp.on()
-    _, _, bat, _ = initialization(init_gy521=False, init_ds18=False, init_bat=True, init_wifi=False)
+    bat = util.init_lipo_adc()
     voltage = bat.get_lipo_voltage()
     vpp.off()
     # Green light indicates healthy battery level
     # Red light means the battery is low
-    if voltage >= 3.66:
+    if voltage >= BAT_VOLTAGE_THRESHOLD:
         led_grn.on()
         led_red.off()
     else:
@@ -377,16 +275,14 @@ else:
         led_red.on()
 
     # Initialize the mode switch (a double-pole single-throw switch)
-    print("Initializing the mode switch")
-    mode_switch = machine.Pin(PIN_MODE, machine.Pin.IN, machine.Pin.PULL_UP)
+    mode_switch = util.init_mode_switch()
     print('--------------------')
     print('First time power on...')
     print('If you wish to enter Calibration Mode, pls trigger the mode switch within 1 minute.')
     print('The system will go into Working Mode when 1 minute is out.')
 
     def first_sleep():
-        with open(FLAG_FIRSTSLEEP, 'w') as s:
-            pass
+        util.create_flag_firstsleep()
         utime.sleep_ms(500)
         machine.reset()
 
@@ -396,18 +292,17 @@ else:
     irq_counter = 0
     # 通过干簧管开关触发重启，进入校准模式
 
-    def switch_cb(pin):
+    def switch_cb():
         global irq_counter
         if irq_counter < 1:
             irq_counter += 1
             led_red.off()
             led_grn.off()
-            machine.disable_irq()
             print('Rebooting to enter Calibration Mode...')
             utime.sleep_ms(3000)
             machine.reset()
 
-    mode_switch.irq(handler=switch_cb, trigger=machine.Pin.IRQ_FALLING)
+    mode_switch.irq(handler=lambda pin: switch_cb(), trigger=machine.Pin.IRQ_FALLING)
 
     # Flashing the LED to indicate the system is standing by user's action
     while True:
